@@ -2,7 +2,6 @@ from concurrent.futures import Future
 import datetime
 import pathlib
 import signal
-import sys
 import time
 
 import notifee
@@ -10,6 +9,7 @@ import notifee
 from src.utils.cli_args import parse_args
 from src.utils.message_source import iter_messages
 from src.utils.diagnostics import DiagnosticsWriter
+from src.utils.logging import setup_json_logging
 
 
 InFlightNotification = tuple[str, Future]
@@ -21,7 +21,6 @@ def sleep_until_tick(next_tick: float) -> None:
     sleep_for = next_tick - now
     if sleep_for > 0:
         time.sleep(sleep_for)
-
 
 def advance_tick_skip_missed(
     next_tick: float,
@@ -42,6 +41,8 @@ def main() -> int:
     stop_requested = False
     max_queue_wait_seconds = 30.0
 
+    logger = setup_json_logging()
+
     def _handle_sigint(_signum: int, _frame) -> None:
         nonlocal stop_requested
         stop_requested = True
@@ -55,6 +56,21 @@ def main() -> int:
     success_path = run_dir / "success.txt"
     failed_path = run_dir / "failed.txt"
     diagnostics_path = run_dir / "diagnostics.json"
+
+    base_extra = {"run_id": run_dir.name}
+
+    logger.info(
+        "run_started",
+        extra={
+            "extra": {
+                **base_extra,
+                "url": url,
+                "interval_seconds": interval_seconds,
+                "messages_source": messages_source,
+                "run_dir": str(run_dir),
+            }
+        },
+    )
 
     in_flight: InFlightNotifications = []
 
@@ -88,13 +104,42 @@ def main() -> int:
                             stage="enqueue",
                             error=str(exc),
                         )
+                        logger.error(
+                            "enqueue_failed",
+                            extra={
+                                "extra": {
+                                    **base_extra,
+                                    "stage": "enqueue",
+                                    "message": message,
+                                    "error": str(exc),
+                                }
+                            },
+                        )
                         break
-                    print(str(exc), file=sys.stderr)
+                    logger.warning(
+                        "queue_full_retrying",
+                        extra={
+                            "extra": {
+                                **base_extra,
+                                "stage": "enqueue",
+                                "error": str(exc),
+                            }
+                        },
+                    )
                     time.sleep(min(0.25, interval_seconds))
 
             if future is not None:
                 in_flight.append((message, future))
                 diagnostics.write(message, status="enqueued")
+                logger.info(
+                    "message_enqueued",
+                    extra={
+                        "extra": {
+                            **base_extra,
+                            "message": message,
+                        }
+                    },
+                )
 
             next_tick = advance_tick_skip_missed(next_tick, interval_seconds)
 
@@ -104,17 +149,48 @@ def main() -> int:
                 success_file.write(f"{message}\n")
                 success_file.flush()
                 diagnostics.write(message, status="success", stage="http")
+                logger.info(
+                    "message_sent",
+                    extra={
+                        "extra": {
+                            **base_extra,
+                            "stage": "http",
+                            "message": message,
+                        }
+                    },
+                )
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 failures += 1
                 failed_file.write(f"{message}\n")
                 failed_file.flush()
-                print(str(exc), file=sys.stderr)
+                logger.error(
+                    "message_failed",
+                    extra={
+                        "extra": {
+                            **base_extra,
+                            "stage": "http",
+                            "message": message,
+                            "error": str(exc),
+                        }
+                    },
+                    exc_info=True,
+                )
                 diagnostics.write(
                     message,
                     status="failed",
                     stage="http",
                     error=str(exc),
                 )
+
+    logger.info(
+        "run_finished",
+        extra={
+            "extra": {
+                **base_extra,
+                "failures": failures,
+            }
+        },
+    )
 
     return 0 if failures == 0 else 1
 
