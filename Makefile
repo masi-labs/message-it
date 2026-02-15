@@ -45,7 +45,7 @@ lint: lint-src lint-tests
 
 lint-src: VOLUMES += '$(PWD)/src:/code/src'
 lint-src:
-	$(RUNNER) pylint --rcfile=src/.pylintrc src/notifee
+	$(RUNNER) pylint --rcfile=src/.pylintrc src/
 
 lint-tests: VOLUMES += '$(PWD)/src:/code/src'
 lint-tests: VOLUMES += '$(PWD)/tests:/code/tests'
@@ -54,4 +54,4 @@ lint-tests:
 
 typecheck: VOLUMES += '$(PWD)/src:/code/src'
 typecheck:
-	$(RUNNER) mypy --config-file=src/mypy.ini src/notifee
+	$(RUNNER) mypy --config-file=src/mypy.ini src/

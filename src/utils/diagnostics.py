@@ -1,5 +1,6 @@
 import datetime
 import json
+import types
 from typing import Any, TextIO
 
 
@@ -58,6 +59,6 @@ class DiagnosticsWriter:
         self,
         exc_type: type[BaseException] | None,
         exc_val: BaseException | None,
-        exc_tb,
+        exc_tb: types.TracebackType | None,
     ) -> None:
         self.finish()

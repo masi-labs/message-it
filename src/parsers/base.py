@@ -4,5 +4,5 @@ from typing import Any
 class Parser(ABC):
     @staticmethod
     @abstractmethod
-    def parse(line: str) -> Any:
+    def parse(value: str) -> Any:
         raise NotImplementedError
