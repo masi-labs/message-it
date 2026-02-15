@@ -1,0 +1,5 @@
+-r prod.txt
+mypy==1.15.*
+pylint==4.0.*
+pytest==9.0.*
+types-requests==2.32.*
