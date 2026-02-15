@@ -1,0 +1,20 @@
+services:
+  receiver:
+    build:
+      context: ./tests/mock_receiver
+    ports:
+      - "8008:8000"
+
+  tests:
+    build:
+      context: .
+      dockerfile: tests/Dockerfile
+    depends_on:
+      - receiver
+    environment:
+      PYTHONPATH: /code
+    volumes:
+      - ./src:/code/src
+      - ./tests:/code/tests
+      - ./runs:/code/runs
+    command: ["pytest", "-p", "no:cacheprovider", "tests/integration"]

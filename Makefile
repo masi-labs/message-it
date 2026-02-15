@@ -25,7 +25,30 @@ clean:
 
 .PHONY: runner test test-unit lint lint-src lint-tests typecheck
 
-test: test-unit
+test: test-unit test-integration
+
+.PHONY: test-integration itest-up itest-down
+
+itest-up:
+	docker compose -f docker-compose.itest.yml up -d --build receiver
+
+itest-down:
+	docker compose -f docker-compose.itest.yml down -v
+
+test-integration:
+	@set -e; \
+		docker compose -f docker-compose.itest.yml up -d --build receiver; \
+		rc=0; \
+		docker compose -f docker-compose.itest.yml run --rm tests || rc=$$?; \
+		docker compose -f docker-compose.itest.yml down -v; \
+		exit $$rc
+
+test-integration-ci:
+	@set -e; \
+		rc=0; \
+		docker compose -f docker-compose.itest.yml up --build --abort-on-container-exit --exit-code-from tests || rc=$$?; \
+		docker compose -f docker-compose.itest.yml down -v; \
+		exit $$rc
 
 runner:
 	DOCKER_BUILDKIT=1 docker build \
