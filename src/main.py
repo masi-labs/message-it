@@ -18,6 +18,12 @@ from src.utils.logging import setup_json_logging
 
 LOGGER = logging.getLogger("message_it")
 
+# Maximum number of in-flight futures to keep track of before
+# processing completed ones
+MAX_WINDOW_SIZE = 100
+# Process completed futures every N enqueued messages
+PROCESS_FREQUENCY = 20
+
 
 InFlightNotification = tuple[str, Future[None]]
 InFlightNotifications = list[InFlightNotification]
@@ -78,16 +84,79 @@ def _advance_tick_skip_missed(
     return next_tick
 
 
-def _enqueue_messages(ctx: RunContext) -> tuple[InFlightNotifications, int]:
+def _process_completed_futures(
+    in_flight: InFlightNotifications,
+    ctx: RunContext,
+) -> int:
+    """Process completed futures and remove them from in_flight list.
+    
+    Returns number of failures encountered.
+    """
+    failures = 0
+    # Find completed futures
+    completed = [(msg, future) for msg, future in in_flight if future.done()]
+
+    # Process completed futures
+    for message, future_obj in completed:
+        in_flight.remove((message, future_obj))
+        try:
+            future_obj.result()
+            ctx.success_file.write(f"{message}\n")
+            ctx.success_file.flush()
+            ctx.diagnostics.write(message, status="success", stage="http")
+            LOGGER.info(
+                "message_sent",
+                extra={
+                    "extra": {
+                        "stage": "http",
+                        "message": message,
+                    }
+                },
+            )
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            failures += 1
+            ctx.failed_file.write(f"{message}\n")
+            ctx.failed_file.flush()
+            LOGGER.error(
+                "message_failed",
+                extra={
+                    "extra": {
+                        "stage": "http",
+                        "message": message,
+                        "error": str(exc),
+                    }
+                },
+                exc_info=True,
+            )
+            ctx.diagnostics.write(
+                message,
+                status="failed",
+                stage="http",
+                error=str(exc),
+            )
+
+    return failures
+
+
+def _enqueue_messages(ctx: RunContext) -> int:
     failures = 0
     in_flight: InFlightNotifications = []
     next_tick = time.monotonic()
+    message_count = 0
 
     for message in iter_messages(ctx.messages_source):
         if ctx.stop_requested_getter():
             break
 
+        # Periodically process completed futures to avoid memory bloat
+        if (
+            len(in_flight) >= MAX_WINDOW_SIZE
+            or (message_count > 0 and message_count % PROCESS_FREQUENCY == 0)
+        ):
+            failures += _process_completed_futures(in_flight, ctx)
+
         _sleep_until_tick(next_tick)
+        message_count += 1
 
         enqueue_deadline = time.monotonic() + ctx.max_queue_wait_seconds
         future: Future[None] | None = None
@@ -138,51 +207,32 @@ def _enqueue_messages(ctx: RunContext) -> tuple[InFlightNotifications, int]:
 
         next_tick = _advance_tick_skip_missed(next_tick, ctx.interval_seconds)
 
-    return in_flight, failures
+    # Process any remaining in-flight futures before returning
+    if in_flight:
+        failures += _process_completed_futures(in_flight, ctx)
 
+        # Process any that might have completed during our first pass
+        while in_flight:
+            # Small delay to allow more futures to complete
+            time.sleep(0.1)
+            old_size = len(in_flight)
+            failures += _process_completed_futures(in_flight, ctx)
+            # If we didn't make progress (no more futures completed), break
+            if len(in_flight) == old_size:
+                break
 
-def _drain_in_flight(
-    *,
-    ctx: RunContext,
-    in_flight: InFlightNotifications,
-) -> int:
-    failures = 0
-    for message, future_obj in in_flight:
-        try:
-            future_obj.result()
-            ctx.success_file.write(f"{message}\n")
-            ctx.success_file.flush()
-            ctx.diagnostics.write(message, status="success", stage="http")
-            LOGGER.info(
-                "message_sent",
-                extra={
-                    "extra": {
-                        "stage": "http",
-                        "message": message,
-                    }
-                },
-            )
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            failures += 1
-            ctx.failed_file.write(f"{message}\n")
-            ctx.failed_file.flush()
-            LOGGER.error(
-                "message_failed",
-                extra={
-                    "extra": {
-                        "stage": "http",
-                        "message": message,
-                        "error": str(exc),
-                    }
-                },
-                exc_info=True,
-            )
-            ctx.diagnostics.write(
-                message,
-                status="failed",
-                stage="http",
-                error=str(exc),
-            )
+    # Log any futures that never completed (should be rare unless
+    # stop requested)
+    for message, _ in in_flight:
+        failures += 1
+        ctx.failed_file.write(f"{message}\n")
+        ctx.failed_file.flush()
+        ctx.diagnostics.write(
+            message,
+            status="failed",
+            stage="http",
+            error="Never completed (possibly interrupted)",
+        )
 
     return failures
 
@@ -230,8 +280,7 @@ def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
             max_queue_wait_seconds=max_queue_wait_seconds,
             stop_requested_getter=lambda: stop_requested,
         )
-        in_flight, failures = _enqueue_messages(ctx)
-        failures += _drain_in_flight(ctx=ctx, in_flight=in_flight)
+        failures = _enqueue_messages(ctx)
 
     LOGGER.info(
         "run_finished",
