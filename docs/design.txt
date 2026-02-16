@@ -1,0 +1,34 @@
+--- Deliverables ---
+CLI (notify) — sends messages (from stdin or a .txt file) to an HTTP server via the library
+Usage: message-it --url http://localhost:8008/notify --interval 5s < messages.txt
+
+--- Functional Requirements ---
+
+- Reads lines from stdin (e.g. message-it ... < messages.txt); each line = one message
+- Alternatively, reads from a .txt file path (one message per line)
+- Every --interval (default 5s), sends the next message via notify()
+- When all lines are sent (or on SIGINT), waits briefly for in-flight notifications
+  to complete
+- SIGINT triggers graceful shutdown (stop enqueuing new messages, process completed
+  in-flight, then exit)
+- Writes per-run artifacts under runs/YYYYmmdd_HHMMSS/: success.txt, failed.txt,
+  diagnostics.json
+- Failures are recorded in failed.txt and diagnostics.json
+- Exit 0 if clean, non-zero if any failures
+
+--- Non-Functional Requirements ---
+
+- Portability: runs as a CLI on macOS; can also be packaged as a standalone
+  executable for testers.
+- Reliability: on SIGINT, stops enqueuing new messages and attempts a graceful
+  shutdown while allowing in-flight notifications to complete.
+- Performance: sends notifications at a fixed interval and avoids unbounded growth
+  of in-flight work by periodically processing completed notifications.
+- Observability: emits structured logs (JSON) and writes per-run diagnostics to
+  runs/YYYYmmdd_HHMMSS/diagnostics.json.
+- Security: does not embed secrets; the target URL is provided by the user at runtime.
+
+
+
+The functionality of sending the messages to an HTTP server is achieved by importing
+the **notifee** library

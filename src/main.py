@@ -67,6 +67,11 @@ class RunContext:
 
 
 def _sleep_until_tick(next_tick: float) -> None:
+    """Sleep until the scheduled tick time.
+
+    This is used to pace enqueuing so we attempt to enqueue at most one message
+    per interval.
+    """
     now = time.monotonic()
     sleep_for = next_tick - now
     if sleep_for > 0:
@@ -77,6 +82,12 @@ def _advance_tick_skip_missed(
     next_tick: float,
     interval_seconds: float,
 ) -> float:
+    """Advance the next tick by one interval.
+
+    If we are already behind (e.g. due to retries / queue-full backpressure),
+    skip missed ticks so we don't "catch up" by enqueuing multiple messages
+    back-to-back.
+    """
     next_tick += interval_seconds
     now = time.monotonic()
     if now > next_tick:
@@ -195,6 +206,8 @@ def _enqueue_messages(ctx: RunContext) -> int:
                         }
                     },
                 )
+                # Brief backoff while queue is full to retry
+                # whichever is smaller: 0.25s or the interval
                 time.sleep(min(0.25, ctx.interval_seconds))
 
         if future is not None:

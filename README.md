@@ -34,6 +34,10 @@ Note: `requirements/prod.txt` installs `notifee` via `git+ssh`. Your machine (or
 
 The entrypoint is `src/main.py`.
 
+Program flow diagram:
+
+- `docs/program-flow.md`
+
 ### Send messages from a file
 
 `messages.txt` must be a `.txt` file containing **one message per line**.
