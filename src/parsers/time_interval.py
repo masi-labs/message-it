@@ -3,7 +3,7 @@ import re
 
 from .base import Parser
 
-INTERVAL_PATTERN = re.compile(r"^(\d+)(s|m)$")
+INTERVAL_PATTERN = re.compile(r"^(\d+(?:\.\d+)?)(s|m)$")
 
 class TimeIntervalParser(Parser):
     @staticmethod
@@ -15,7 +15,7 @@ class TimeIntervalParser(Parser):
                 f"invalid interval '{value}': must be a number followed by 's'"
                 " (seconds) or 'm' (minutes), e.g. 5s, 2m"
             )
-        amount = int(match.group(1))
+        amount = float(match.group(1))
         unit = match.group(2)
         if amount <= 0:
             raise argparse.ArgumentTypeError("interval must be greater than 0")
