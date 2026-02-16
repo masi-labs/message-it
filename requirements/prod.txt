@@ -1,3 +1,3 @@
 requests==2.32.*
 
-notifee @ git+ssh://git@github.com/masi-labs/notifee.git@main
+notifee @ git+ssh://git@github.com/masi-labs/notifee.git@v1.0.0
