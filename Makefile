@@ -4,6 +4,8 @@ PYTHON ?= 3.14
 
 DOCKER_ARGS = --rm --interactive --tty
 
+DC_ITEST = docker compose -f docker-compose.itest.yml
+
 ifeq ($(CI),true)
 	# Github Actions doesn't provide a TTY
 	DOCKER_ARGS = --rm
@@ -29,25 +31,26 @@ test: test-unit test-integration
 
 .PHONY: test-integration itest-up itest-down
 
-itest-up:
-	docker compose -f docker-compose.itest.yml up -d --build receiver
+mock-up:
+	$(DC_ITEST) up -d --build receiver
+	$(DC_ITEST) logs -f receiver
 
-itest-down:
-	docker compose -f docker-compose.itest.yml down -v
+mock-down:
+	$(DC_ITEST) down -v
 
 test-integration:
 	@set -e; \
-		docker compose -f docker-compose.itest.yml up -d --build receiver; \
+		$(DC_ITEST) up -d --build receiver; \
 		rc=0; \
-		docker compose -f docker-compose.itest.yml run --rm tests || rc=$$?; \
-		docker compose -f docker-compose.itest.yml down -v; \
+		$(DC_ITEST) run --rm tests || rc=$$?; \
+		$(DC_ITEST) down -v; \
 		exit $$rc
 
 test-integration-ci:
 	@set -e; \
 		rc=0; \
-		docker compose -f docker-compose.itest.yml up --build --abort-on-container-exit --exit-code-from tests || rc=$$?; \
-		docker compose -f docker-compose.itest.yml down -v; \
+		$(DC_ITEST) up --build --abort-on-container-exit --exit-code-from tests || rc=$$?; \
+		$(DC_ITEST) down -v; \
 		exit $$rc
 
 runner:
