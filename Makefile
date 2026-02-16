@@ -1,6 +1,9 @@
 IMG_PREFIX = message-it
 VERSION ?= latest
 PYTHON ?= 3.14
+EXE_NAME ?= message-it
+EXE_ENTRY ?= message-it.py
+PACKAGER_PYTHON ?= python
 
 DOCKER_ARGS = --rm --interactive --tty
 
@@ -24,8 +27,9 @@ default: runner test lint typecheck
 clean:
 	docker image rm '$(IMG_PREFIX)-runner:$(VERSION)'
 
-
 .PHONY: runner test test-unit lint lint-src lint-tests typecheck
+.PHONY: test-integration itest-up itest-down
+.PHONY: exe-macos-arm64 exe-macos-x86_64
 
 test: test-unit test-integration
 
@@ -81,3 +85,9 @@ lint-tests:
 typecheck: VOLUMES += '$(PWD)/src:/code/src'
 typecheck:
 	$(RUNNER) mypy --config-file=src/mypy.ini src/
+
+exe-macos-arm64:
+	arch -arm64 $(PACKAGER_PYTHON) -m PyInstaller --clean --onefile --name '$(EXE_NAME)' '$(EXE_ENTRY)'
+
+exe-macos-x86_64:
+	arch -x86_64 $(PACKAGER_PYTHON) -m PyInstaller --clean --onefile --name '$(EXE_NAME)' '$(EXE_ENTRY)'

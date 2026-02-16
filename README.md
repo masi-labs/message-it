@@ -136,6 +136,40 @@ make typecheck
 
 Integration tests use `docker-compose.itest.yml` which starts a mock receiver on port `8008`.
 
+## Building a macOS executable
+
+This project can be packaged into a standalone macOS executable using PyInstaller.
+
+Note: at the time of writing, PyInstaller supports Python `<3.14`, so if you're running the project with Python 3.14 you will typically need a separate packaging environment using Python 3.13.
+
+1. Install dev dependencies (includes PyInstaller):
+
+```bash
+pip install -r requirements/dev.txt
+```
+
+2. Build:
+
+```bash
+make exe-macos-arm64
+```
+
+The resulting binary will be at:
+
+- `dist/message-it`
+
+If you have multiple Python installations, you can choose which interpreter is used for packaging:
+
+```bash
+make exe-macos-arm64 PACKAGER_PYTHON=python3.13
+```
+
+To build an Intel (x86_64) binary, you need an x86_64 Python available on your machine:
+
+```bash
+make exe-macos-x86_64 PACKAGER_PYTHON=python3.13
+```
+
 ### Manual end-to-end test (from your console)
 
 After installing dependencies, you can manually run an end-to-end test locally using the same mock receiver used by integration tests.
