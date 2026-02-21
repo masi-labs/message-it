@@ -132,6 +132,7 @@ def test_main_success_path_writes_success_and_returns_0(
     run_dir = tmp_path / "runs" / "20200101_000000"
     assert (run_dir / "success.txt").read_text(encoding="utf-8").splitlines() == ["m1", "m2"]
     assert (run_dir / "failed.txt").read_text(encoding="utf-8") == ""
+    assert (run_dir / "skipped.txt").read_text(encoding="utf-8") == ""
 
 
 def test_main_failure_path_writes_failed_and_returns_1(
@@ -168,3 +169,58 @@ def test_main_failure_path_writes_failed_and_returns_1(
     run_dir = tmp_path / "runs" / "20200101_000000"
     assert (run_dir / "success.txt").read_text(encoding="utf-8") == ""
     assert (run_dir / "failed.txt").read_text(encoding="utf-8").splitlines() == ["m1"]
+    assert (run_dir / "skipped.txt").read_text(encoding="utf-8") == ""
+
+
+def test_main_stop_mid_run_writes_skipped(tmp_path) -> None:
+    """Messages not yet processed when Ctrl+C fires must land in skipped.txt."""
+
+    def _iter_messages(_src: str) -> Iterator[str]:
+        yield "m1"  # processed normally
+        yield "m2"  # stop fires before this → skipped
+        yield "m3"  # also skipped
+
+    fut1: Future = Future()
+    fut1.set_result(None)
+
+    # Capture the SIGINT handler registered by _run, then fire it from
+    # _advance_tick_skip_missed after m1's tick so that m2 and m3 are skipped.
+    # Untyped list so elements are Any — pylint accepts them as callable.
+    captured_handler: list = []
+    advance_calls: list[int] = [0]
+
+    def _capture_signal(_signum, handler) -> None:
+        captured_handler.append(handler)
+
+    def _fire_after_first(next_tick: float, _interval: float) -> float:
+        advance_calls[0] += 1
+        if advance_calls[0] == 1:
+            captured_handler[0](main_mod.signal.SIGINT, None)
+        return next_tick
+
+    logger = MagicMock()
+
+    with (
+        _cwd(tmp_path),
+        patch.object(main_mod, "parse_args", return_value=Namespace(url="http://example", interval=0.0, messages="-")),
+        patch.object(main_mod, "iter_messages", _iter_messages),
+        patch.object(main_mod, "LOGGER", logger),
+        patch.object(
+            main_mod.notifee,
+            "Notifier",
+            side_effect=functools.partial(_FakeNotifier, futures=[fut1]),
+        ),
+        patch.object(main_mod, "DiagnosticsWriter", side_effect=_FakeDiagnostics),
+        patch.object(main_mod, "setup_json_logging"),
+        patch.object(main_mod.signal, "signal", side_effect=_capture_signal),
+        patch.object(main_mod.time, "sleep"),
+        patch.object(main_mod, "_sleep_until_tick"),
+        patch.object(main_mod, "_advance_tick_skip_missed", side_effect=_fire_after_first),
+        patch.object(main_mod.datetime, "datetime", _FixedDateTime),
+    ):
+        assert main_mod.main() == 0  # skips don't count as failures
+
+    run_dir = tmp_path / "runs" / "20200101_000000"
+    assert (run_dir / "success.txt").read_text(encoding="utf-8").splitlines() == ["m1"]
+    assert (run_dir / "failed.txt").read_text(encoding="utf-8") == ""
+    assert (run_dir / "skipped.txt").read_text(encoding="utf-8").splitlines() == ["m2", "m3"]
