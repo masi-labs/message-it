@@ -252,7 +252,7 @@ def _enqueue_messages(ctx: RunContext) -> int:
 
 def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
     stop_requested = False
-    max_queue_wait_seconds = 30.0
+    max_queue_wait_seconds = 15.0
 
     setup_json_logging()
 
@@ -280,7 +280,12 @@ def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
         run_files.success_path.open("w", encoding="utf-8") as success_file,
         run_files.failed_path.open("w", encoding="utf-8") as failed_file,
         run_files.diagnostics_path.open("w", encoding="utf-8") as diag_file,
-        notifee.Notifier(url=url, formatter=CustomJsonMessage()) as notifier,
+        notifee.Notifier(
+            url=url,
+            formatter=CustomJsonMessage(),
+            max_workers=100,
+            timeout=10,
+        ) as notifier,
         DiagnosticsWriter(diag_file) as diagnostics,
     ):
         ctx = RunContext(
