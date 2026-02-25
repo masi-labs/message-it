@@ -6,7 +6,7 @@ import pathlib
 import signal
 import time
 import types
-from typing import Callable, TextIO
+from typing import Callable, Iterator, TextIO
 
 import notifee  # type: ignore[import-untyped]
 
@@ -23,6 +23,9 @@ LOGGER = logging.getLogger("message_it")
 MAX_WINDOW_SIZE = 100
 # Process completed futures every N enqueued messages
 PROCESS_FREQUENCY = 20
+# Maximum time to wait for a message to be enqueued
+# before giving up
+MAX_QUEUE_WAIT_SECONDS = 15.0
 
 
 InFlightNotification = tuple[str, Future[None]]
@@ -40,6 +43,7 @@ class RunFiles:
     success_path: pathlib.Path
     failed_path: pathlib.Path
     diagnostics_path: pathlib.Path
+    skipped_path: pathlib.Path
 
 
 def _prepare_run_files() -> RunFiles:
@@ -51,6 +55,7 @@ def _prepare_run_files() -> RunFiles:
         success_path=run_dir / "success.txt",
         failed_path=run_dir / "failed.txt",
         diagnostics_path=run_dir / "diagnostics.json",
+        skipped_path=run_dir / "skipped.txt",
     )
 
 
@@ -60,9 +65,9 @@ class RunContext:
     diagnostics: DiagnosticsWriter
     success_file: TextIO
     failed_file: TextIO
+    skipped_file: TextIO
     messages_source: str
     interval_seconds: float
-    max_queue_wait_seconds: float
     stop_requested_getter: Callable[[], bool]
 
 
@@ -155,8 +160,14 @@ def _enqueue_messages(ctx: RunContext) -> int:
     next_tick = time.monotonic()
     message_count = 0
 
-    for message in iter_messages(ctx.messages_source):
+    msg_iter: Iterator[str] = iter_messages(ctx.messages_source)
+
+    for message in msg_iter:
         if ctx.stop_requested_getter():
+            # This message was already consumed from the iterator but not yet
+            # processed. Pipe it through _process_skipped so it lands in
+            # skipped.txt instead of being silently dropped.
+            _process_skipped(iter([message]), ctx)
             break
 
         # Periodically process completed futures to avoid memory bloat
@@ -169,7 +180,7 @@ def _enqueue_messages(ctx: RunContext) -> int:
         _sleep_until_tick(next_tick)
         message_count += 1
 
-        enqueue_deadline = time.monotonic() + ctx.max_queue_wait_seconds
+        enqueue_deadline = time.monotonic() + MAX_QUEUE_WAIT_SECONDS
         future: Future[None] | None = None
         while future is None and not ctx.stop_requested_getter():
             try:
@@ -221,6 +232,15 @@ def _enqueue_messages(ctx: RunContext) -> int:
         next_tick = _advance_tick_skip_missed(next_tick, ctx.interval_seconds)
 
     # Process any remaining in-flight futures before returning
+    failures += _drain_in_flight(in_flight, ctx)
+
+    # Process any skipped messages
+    _process_skipped(msg_iter, ctx)
+
+    return failures
+
+def _drain_in_flight(in_flight: InFlightNotifications, ctx: RunContext) -> int:
+    failures = 0
     if in_flight:
         failures += _process_completed_futures(in_flight, ctx)
 
@@ -246,13 +266,25 @@ def _enqueue_messages(ctx: RunContext) -> int:
             stage="http",
             error="Never completed (possibly interrupted)",
         )
-
+        LOGGER.error(
+            "message_not_completed",
+            extra={"extra": {"message": message}},
+        )
     return failures
 
+def _process_skipped(msg_iter: Iterator[str], ctx: RunContext) -> None:
+    for message in msg_iter:
+        ctx.skipped_file.write(f"{message}\n")
+        ctx.skipped_file.flush()
+        ctx.diagnostics.write(
+            message,
+            status="skipped",
+            stage="enqueue",
+            error="Never completed (possibly interrupted)",
+        )
 
 def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
     stop_requested = False
-    max_queue_wait_seconds = 30.0
 
     setup_json_logging()
 
@@ -280,7 +312,13 @@ def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
         run_files.success_path.open("w", encoding="utf-8") as success_file,
         run_files.failed_path.open("w", encoding="utf-8") as failed_file,
         run_files.diagnostics_path.open("w", encoding="utf-8") as diag_file,
-        notifee.Notifier(url=url, formatter=CustomJsonMessage()) as notifier,
+        run_files.skipped_path.open("w", encoding="utf-8") as skipped_file,
+        notifee.Notifier(
+            url=url,
+            formatter=CustomJsonMessage(),
+            max_workers=100,
+            timeout=10,
+        ) as notifier,
         DiagnosticsWriter(diag_file) as diagnostics,
     ):
         ctx = RunContext(
@@ -288,9 +326,9 @@ def _run(*, url: str, interval_seconds: float, messages_source: str) -> int:
             diagnostics=diagnostics,
             success_file=success_file,
             failed_file=failed_file,
+            skipped_file=skipped_file,
             messages_source=messages_source,
             interval_seconds=interval_seconds,
-            max_queue_wait_seconds=max_queue_wait_seconds,
             stop_requested_getter=lambda: stop_requested,
         )
         failures = _enqueue_messages(ctx)
